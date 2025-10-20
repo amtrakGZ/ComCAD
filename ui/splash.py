@@ -19,14 +19,17 @@ LOGO_RATIO = 0.50         # % del ancho/alto
 BAR_WIDTH_RATIO = 0.62
 PROGRESS_HEIGHT = 12
 DOTS_INTERVAL_MS = 550
-FAKE_PROGRESS_DURATION_MS = 15000   # Duración animación barra (ms)
+FAKE_PROGRESS_DURATION_MS = 8000   # Duración animación barra (ms)
 FINISH_DELAY_MS = 300              # Pequeña pausa tras 100%
 FADE_IN_MS = 350
 FADE_OUT_MS = 300
 USE_FADE = True
-SHADOW = False                     # Pon True si quieres sombra (ligero coste)
+SHADOW = True                     # Pon True si quieres sombra (ligero coste)
 ALLOW_SKIP = True
-LOGO_PATH = "assets/logov1.png"
+# Paths relative to project root (parent of this file's directory)
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+LOGO_PATH = os.path.join(ROOT_DIR, "assets", "logov1.png")
+STYLES_PATH = os.path.join(ROOT_DIR, "styles", "styles.css")
 
 # ---------------- SPLASH ---------------- #
 class FastSplash(QWidget):
@@ -136,20 +139,19 @@ class FastSplash(QWidget):
         lay.addWidget(self.loading)
 
         if SHADOW:
-            shadow = QGraphicsDropShadowEffect(self)
-            shadow.setBlurRadius(24)
-            shadow.setOffset(0, 6)
-            shadow.setColor(QColor(0, 0, 0, 110))
-            self.card.setGraphicsEffect(shadow)
+            # Guardar la referencia en self evita que el efecto pueda ser recolectado
+            # y mejora la estabilidad de los repaints de hijos animados (ej. QProgressBar).
+            self._shadow_effect = QGraphicsDropShadowEffect(self)
+            self._shadow_effect.setBlurRadius(24)
+            self._shadow_effect.setOffset(0, 6)
+            self._shadow_effect.setColor(QColor(0, 0, 0, 110))
+            self.card.setGraphicsEffect(self._shadow_effect)
 
         if ALLOW_SKIP:
             self.setToolTip("Presiona ESC para omitir")
 
     def _load_logo(self):
-        base = os.path.dirname(os.path.abspath(__file__))
         path = LOGO_PATH
-        if not os.path.isabs(path):
-            path = os.path.join(base, path)
         pm = QPixmap(path)
         if pm.isNull():
             self.logo_label.setText("")
@@ -192,7 +194,14 @@ class FastSplash(QWidget):
 
     @pyqtSlot("QVariant")
     def _on_progress_value(self, v):
-        self.percent.setText(f"{int(v)}%")
+        # En algunos sistemas, con un QGraphicsDropShadowEffect activo, la animación
+        # puede no repintar visualmente si sólo se usa el QPropertyAnimation implícito.
+        # Forzamos el setValue y un update manual para asegurar que el chunk se dibuje.
+        iv = int(v)
+        if self.progress.value() != iv:
+            self.progress.setValue(iv)
+        self.percent.setText(f"{iv}%")
+        self.progress.update()
 
     def _on_progress_finished(self):
         QTimer.singleShot(FINISH_DELAY_MS, self.finish)
@@ -243,9 +252,10 @@ class FastSplash(QWidget):
 
     def _launch_main(self):
         try:
-            from main import VentanaPrincipal
-            w = VentanaPrincipal()
-            w.show()
+            # Import as package to work when run from app.py
+            from ui.main import VentanaPrincipal
+            self._main_window = VentanaPrincipal()
+            self._main_window.show()
         except Exception as e:
             QMessageBox.critical(None, "Error", f"No se pudo abrir ventana principal:\n{e}")
 
@@ -260,8 +270,16 @@ class FastSplash(QWidget):
 # ---------------- FUNCIÓN PRINCIPAL ---------------- #
 def main():
     app = QApplication.instance() or QApplication(sys.argv)
+    # Load global stylesheet so both splash and main share it
+    try:
+        if os.path.isfile(STYLES_PATH):
+            with open(STYLES_PATH, "r", encoding="utf-8") as f:
+                app.setStyleSheet(f.read())
+    except Exception:
+        pass
+
     splash = FastSplash()
-    # Permite devolver control a otros componentes
+    # Keep running
     sys.exit(app.exec_())
 
 

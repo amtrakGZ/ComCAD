@@ -1,0 +1,220 @@
+/* Estilos principales (gradiente se pinta en paintEvent) */
+
+QMainWindow {
+    background: #0d4d63;
+    color: #e4ecf0;
+}
+
+/* Menubar */
+QMenuBar {
+    background: rgba(10,40,55,0.55);
+    border: 0;
+    color: #e4ecf0;
+}
+QMenuBar::item:selected {
+    background: rgba(255,255,255,0.10);
+    border-radius: 4px;
+}
+QMenu {
+    background: #e4ecf0;
+    border: 1px solid rgba(255,255,255,0.12);
+}
+QMenu::item {
+    padding: 6px 16px;
+}
+QMenu::item:selected {
+    background: rgba(255,255,255,0.12);
+}
+
+/* Toolbar */
+QToolBar {
+    background: rgba(10,40,55,0.65);
+    border: 0;
+    padding: 6px;
+}
+QToolBar QToolButton {
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.12);
+    color: #e4ecf0;
+    padding: 6px 10px;
+    border-radius: 6px;
+    font-weight: 500;
+    margin-right: 6px; /* separación entre botones */
+}
+QToolBar QToolButton:hover {
+    background: rgba(255,255,255,0.12);
+}
+QToolBar QToolButton:pressed {
+    background: rgba(0,0,0,0.30);
+}
+QToolBar QToolButton:checked {
+    background: #1382a8;           /* más visible cuando está activo */
+    border: 1px solid #19a7d8;
+    color: #eaf7fb;
+}
+
+/* StatusBar */
+QStatusBar {
+    background: rgba(10,44,60,0.70);
+    color: #e4ecf0;
+    border-top: 1px solid rgba(255,255,255,0.12);
+}
+QStatusBar QLabel {
+    color: #d1dde2;
+    padding: 0 6px;
+}
+
+/* DockWidgets */
+QDockWidget {
+    background: rgba(14,55,70,0.55);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 8px;
+}
+QDockWidget::title {
+    text-align: left;
+    background: rgba(255,255,255,0.09); /* un poco más contraste */
+    padding: 6px 10px;
+    color: #e4ecf0;
+    font-weight: 600;
+    border-top-left-radius: 8px;
+    border-top-right-radius: 8px;
+}
+/* Docks content */
+QDockWidget > QWidget {
+    background: rgba(9, 35, 45, 0.35);
+}
+
+/* Área de dibujo */
+QWidget#graphicsView {
+    border: 1px solid #0c2a36;
+    background: #161b1f;
+}
+
+/* Botones */
+QPushButton {
+    background: rgba(255,255,255,0.07);
+    border: 1px solid rgba(255,255,255,0.16);
+    padding: 8px 12px;
+    color: #e8f2f6;
+    border-radius: 6px;
+    font-weight: 500;
+}
+QPushButton:hover {
+    background: rgba(255,255,255,0.16);
+}
+QPushButton:pressed {
+    background: rgba(0,0,0,0.35);
+}
+/* Enfoque accesible (sin box-shadow; compatible con Qt) */
+QPushButton:focus {
+    border: 2px solid #19a7d8;
+    background: rgba(25,167,216,0.12);
+}
+/* Alternativa de marco de foco global (opcional) */
+QFocusFrame {
+    border: 2px solid rgba(25,167,216,0.75);
+    border-radius: 6px;
+}
+
+/* Controles de formulario (inspector de propiedades) */
+QComboBox, QLineEdit, QDoubleSpinBox {
+    background: rgba(0,0,0,0.25);
+    border: 1px solid rgba(255,255,255,0.12);
+    color: #e4ecf0;
+    border-radius: 6px;
+    padding: 4px 6px;
+}
+
+/* Scrollbars integradas al tema */
+QScrollBar:vertical,
+QScrollBar:horizontal {
+    background: rgba(8,30,40,0.55);
+    border: 0;
+    margin: 0;
+}
+QScrollBar::handle:vertical,
+QScrollBar::handle:horizontal {
+    background: rgba(25,167,216,0.35);
+    min-height: 28px;
+    min-width: 28px;
+    border-radius: 5px;
+    border: 1px solid rgba(25,167,216,0.55);
+}
+QScrollBar::handle:vertical:hover,
+QScrollBar::handle:horizontal:hover {
+    background: rgba(25,167,216,0.55);
+}
+QScrollBar::add-line,
+QScrollBar::sub-line {
+    width: 0;
+    height: 0;
+    background: transparent;
+    border: none;
+}
+
+/* Labels */
+QLabel {
+    color: #e4ecf0;
+}
+
+/* Botones del panel izquierdo: alinear texto a la izquierda */
+QDockWidget#dockLeft QPushButton {
+    text-align: left;
+    padding-left: 10px;
+}
+
+/* Tarjeta de bienvenida (compatibilidad con dos IDs posibles) */
+QWidget#WelcomeCard,
+QWidget#welcomeCard {
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 12px;
+}
+
+/* Botones de la card de bienvenida */
+QWidget#WelcomeCard QPushButton,
+QWidget#welcomeCard QPushButton {
+    min-width: 220px;
+    padding: 9px 14px;
+    border-radius: 8px;
+    background: rgba(255,255,255,0.08);
+    border: 1px solid rgba(255,255,255,0.16);
+    color: #e8f2f6;
+    font-weight: 600;
+}
+QWidget#WelcomeCard QPushButton:hover,
+QWidget#welcomeCard QPushButton:hover {
+    background-color: #0c2a36;
+    border: 1px solid #0d4d63;
+    color: #d1dde2;
+    font-weight: 600;
+}
+
+/* Labels subtle secondary */
+QLabel[secondary="true"] { color: rgba(230,240,245,0.85); }
+
+/* Diálogos (Configuración y Acerca de) */
+QDialog#SettingsDialog, QDialog#AboutDialog {
+    background: #103949;
+    color: #eaf7fb;
+    border: 1px solid #19a7d8;
+    border-radius: 10px;
+}
+QDialog#SettingsDialog QLabel, QDialog#AboutDialog QLabel {
+    color: #eaf7fb;
+}
+QDialogButtonBox QPushButton {
+    background: #0f6f90;
+    color: #e8f8fc;
+    border: 1px solid #1093c0;
+    padding: 6px 14px;
+    border-radius: 6px;
+    min-width: 80px;
+    font-weight: 600;
+}
+QDialogButtonBox QPushButton:hover {
+    background: #129fd1;
+}
+QDialogButtonBox QPushButton:pressed {
+    background: #0b5d78;
+}
