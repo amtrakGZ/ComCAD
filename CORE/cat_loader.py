@@ -4,13 +4,21 @@ Características:
 - DWG, DXF, PDF
 - Conversión DWG → DXF vía ODA (si disponible)
 - Extracción de primitivas:
-  LINE, (LW)POLYLINE, CIRCLE, ARC, TEXT (opcional), expansión de bloques INSERT
+  LINE, (LW)POLYLINE, CIRCLE, ARC, TEXT, MTEXT, HATCH
+  y soporte ampliado para SPLINE, ELLIPSE, SOLID, TRACE, 3DFACE.
+  Se expanden bloques (INSERT) respetando transformaciones.
 - Metadatos: lineweight (lw en 1/100 mm), linetype (lt), info de bloque
 
-Mejoras:
+Mejoras clave:
 - Colores ACI reales (BYLAYER/BYBLOCK), grosor/tipo de línea efectivos.
 - Transformación correcta de INSERT (rotación/escala/base point).
-- Soporte básico para HATCH (loops) y MTEXT (plain_text).
+- Soporte para:
+   * HATCH (loops) y MTEXT (plain_text)
+   * SPLINE → polilínea aproximada
+   * ELLIPSE → polilínea aproximada
+   * SOLID/TRACE → polígono
+   * 3DFACE → polígono
+- Fallback a paths (ezdxf.path) para entidades no reconocidas, discretizándolas a polilíneas.
 - Ignora capas no visibles e entidades invisibles/vacías.
 - Extents calculados si no están en encabezado.
 
@@ -28,25 +36,34 @@ import math
 from dataclasses import dataclass, field
 from typing import List, Optional, Dict, Any, Tuple, Union
 
+# ---------------- ezdxf y utilidades opcionales ---------------- #
 try:
     import ezdxf  # type: ignore
     from ezdxf.lldxf.const import DXFStructureError  # type: ignore
     from ezdxf import const as DXFCONST  # type: ignore
+    try:
+        # Para fallback de entidades a caminos
+        from ezdxf import path as ezdxf_path  # type: ignore
+    except Exception:  # pragma: no cover
+        ezdxf_path = None  # type: ignore
 except Exception:  # pragma: no cover
     ezdxf = None  # type: ignore
     DXFStructureError = Exception  # type: ignore
     DXFCONST = None  # type: ignore
+    ezdxf_path = None  # type: ignore
 
 # Colores ACI (compat con distintas versiones)
 try:
     # ezdxf >= 1.0
     from ezdxf.colors import aci2rgb as _aci2rgb  # type: ignore
+
     def _aci_to_rgb(c: int) -> tuple:
         return _aci2rgb(c)
 except Exception:
     try:
         # Algunos entornos exponen aci_to_rgb
         from ezdxf.colors import aci_to_rgb as _aci2rgb_alt  # type: ignore
+
         def _aci_to_rgb(c: int) -> tuple:
             return _aci2rgb_alt(c)
     except Exception:
@@ -54,6 +71,7 @@ except Exception:
             # Fallback neutro (gris) si no hay tabla ACI disponible
             return (200, 200, 210)
 
+# PDF
 try:
     import fitz  # PyMuPDF
 except Exception:  # pragma: no cover
@@ -64,6 +82,7 @@ try:
 except Exception:  # pragma: no cover
     PyPDF2 = None  # type: ignore
 
+# Qt
 from PyQt5.QtWidgets import QFileDialog, QWidget, QGraphicsView
 from PyQt5.QtGui import QPixmap, QImage
 from PyQt5.QtCore import Qt
@@ -113,7 +132,7 @@ class LoadError:
 @dataclass
 class LoadResult:
     path: str
-    type: str  # 'dwg' | 'dxf' | 'pdf'
+    type: str  # 'dwg' | 'dxf' | 'pdf' | 'unknown'
     dwg: Optional[DwgInfo] = None
     pdf: Optional[PdfPreview] = None
     error: Optional[LoadError] = None
@@ -447,7 +466,7 @@ def _effective_linetype(doc, entity) -> Tuple[str, str]:
         lt = getattr(entity.dxf, "linetype", None)
     except Exception:
         lt = None
-    if not lt or lt.upper() in ("BYLAYER", "BYBLOCK"):
+    if not lt or (isinstance(lt, str) and lt.upper() in ("BYLAYER", "BYBLOCK")):
         try:
             lay = doc.layers.get(entity.dxf.layer)
             lt_layer = getattr(lay.dxf, "linetype", "CONTINUOUS")
@@ -471,6 +490,11 @@ def extraer_primitivas_basicas(path: str,
     Obtiene primitivas básicas (incluyendo entidades dentro de INSERT).
     Retorna lista de Primitive. TEXT/MTEXT y HATCH se incluyen si están habilitados.
 
+    Mejoras:
+      - Soporte para SPLINE, ELLIPSE (aprox a polilínea)
+      - Soporte para SOLID, TRACE, 3DFACE (polígonos)
+      - Fallback a paths (ezdxf.path) -> polilínea
+
     Límites:
         - limitar: corte antes de expandir (modelspace directo)
         - max_block_repeats: protege contra explosión de instancias
@@ -484,7 +508,8 @@ def extraer_primitivas_basicas(path: str,
         return []
 
     msp = doc.modelspace()
-    from ezdxf.math import Matrix44
+    from ezdxf.math import Matrix44  # import local para evitar fallo si ezdxf no está
+
     prims: List[Primitive] = []
     cuenta = 0
     block_repeats: Dict[str, int] = {}
@@ -507,8 +532,8 @@ def extraer_primitivas_basicas(path: str,
         cuenta += 1
 
     def apply_point(pt, m: Matrix44 | None):
+        # pt puede ser tuple de 2 o 3
         if m:
-            # pt puede ser tuple de 2 o 3
             x = pt[0]
             y = pt[1]
             z = pt[2] if len(pt) > 2 else 0.0
@@ -593,6 +618,80 @@ def extraer_primitivas_basicas(path: str,
             pass
         return loops
 
+    # ---- NUEVOS: aproximaciones/conversión de entidades ---- #
+    def _approx_polyline_from_spline(e, segments: int = 200) -> List[Tuple[float, float]]:
+        try:
+            pts3d = list(e.approximate(segments=segments))  # ezdxf >= 1.0
+            return [(float(p[0]), float(p[1])) for p in pts3d]
+        except Exception:
+            try:
+                # Fallback con fit points (menos preciso)
+                pts = getattr(e, "fit_points", []) or []
+                return [(float(p[0]), float(p[1])) for p in pts]
+            except Exception:
+                return []
+
+    def _approx_polyline_from_ellipse(e, segments: int = 128) -> List[Tuple[float, float]]:
+        try:
+            ce = e.construction_tool()  # ConstructionEllipse
+            pts = list(ce.approximate(segments=segments))
+            return [(float(p[0]), float(p[1])) for p in pts]
+        except Exception:
+            # Fallback rudimentario con parámetros
+            try:
+                center = e.dxf.center
+                major = e.dxf.major_axis
+                ratio = float(e.dxf.ratio)
+                ang = math.atan2(major[1], major[0])
+                a = (major[0] ** 2 + major[1] ** 2) ** 0.5
+                b = a * ratio
+                out = []
+                for i in range(segments + 1):
+                    t = (2 * math.pi) * (i / segments)
+                    x = a * math.cos(t)
+                    y = b * math.sin(t)
+                    xr = x * math.cos(ang) - y * math.sin(ang)
+                    yr = x * math.sin(ang) + y * math.cos(ang)
+                    out.append((center[0] + xr, center[1] + yr))
+                return out
+            except Exception:
+                return []
+
+    def _poly_from_solid_or_trace(e) -> List[Tuple[float, float]]:
+        pts = []
+        for attr in ("vtx0", "vtx1", "vtx2", "vtx3"):
+            if hasattr(e.dxf, attr):
+                v = getattr(e.dxf, attr)
+                if v is not None:
+                    pts.append((float(v[0]), float(v[1]), float(v[2]) if len(v) > 2 else 0.0))
+        # Limpia duplicados consecutivos
+        clean = []
+        for p in pts:
+            if not clean or (abs(clean[-1][0] - p[0]) > 1e-9 or abs(clean[-1][1] - p[1]) > 1e-9):
+                clean.append(p)
+        if len(clean) >= 3:
+            flat = [(p[0], p[1]) for p in clean]
+            if flat[0] != flat[-1]:
+                flat.append(flat[0])
+            return flat
+        return []
+
+    def _poly_from_3dface(e) -> List[Tuple[float, float]]:
+        pts = []
+        for i in range(4):
+            try:
+                v = getattr(e.dxf, f"vtx{i}")
+            except Exception:
+                v = None
+            if v:
+                pts.append((float(v[0]), float(v[1]), float(v[2]) if len(v) > 2 else 0.0))
+        flat = [(p[0], p[1]) for p in pts]
+        if len(flat) >= 3:
+            if flat[0] != flat[-1]:
+                flat.append(flat[0])
+            return flat
+        return []
+
     # Nota: propagamos byblock_color hacia entidades hijas de INSERT
     def entity_to_prims(e, transform: Matrix44 | None, depth=0, block_name=None, byblock_color: Optional[tuple] = None):
         nonlocal cuenta
@@ -610,12 +709,16 @@ def extraer_primitivas_basicas(path: str,
         layer = getattr(e.dxf, "layer", "0")
 
         col = _effective_color(doc, e, byblock_color)
-        lw_val, lw_src = _effective_lineweight(doc, e)
-        lt_val, lt_src = _effective_linetype(doc, e)
+        lw_val, _lw_src = _effective_lineweight(doc, e)
+        lt_val, _lt_src = _effective_linetype(doc, e)
 
         def base_data():
-            return {"lw": lw_val, "lw_raw": getattr(e.dxf, "lineweight", None) or 0,
-                    "lt": lt_val, "lt_raw": getattr(e.dxf, "linetype", None) or "BYLAYER"}
+            return {
+                "lw": lw_val,
+                "lw_raw": getattr(e.dxf, "lineweight", None) or 0,
+                "lt": lt_val,
+                "lt_raw": getattr(e.dxf, "linetype", None) or "BYLAYER",
+            }
 
         try:
             if dxftype == "LINE":
@@ -630,7 +733,6 @@ def extraer_primitivas_basicas(path: str,
                 pts: List[Tuple[float, float]] = []
                 closed = False
                 if dxftype == "LWPOLYLINE":
-                    # e.__iter__() recorre vértices LWPOLYLINE
                     for v in e:
                         pt = apply_point((v.dxf.x, v.dxf.y, 0.0), transform)
                         pts.append((pt[0], pt[1]))
@@ -678,7 +780,6 @@ def extraer_primitivas_basicas(path: str,
                     }, block_name is not None, block_name)
 
             elif incluir_texto and dxftype == "MTEXT":
-                # Soporte básico para MTEXT
                 ins = apply_point(e.dxf.insert, transform)
                 rot = float(getattr(e.dxf, "rotation", 0.0) or 0.0)
                 ch = float(getattr(e.dxf, "char_height", 2.5) or 2.5)
@@ -703,6 +804,59 @@ def extraer_primitivas_basicas(path: str,
                         **base_data(),
                         "loops": loops,     # List[List[(x,y)]]
                         "solid": solid,
+                    }, block_name is not None, block_name)
+
+            # ---- NUEVOS: Soportes adicionales comunes en DXF ---- #
+            elif dxftype == "SPLINE":
+                raw = _approx_polyline_from_spline(e, segments=220)
+                if raw:
+                    pts = []
+                    for x, y in raw:
+                        px, py, _ = apply_point((x, y, 0.0), transform)
+                        pts.append((px, py))
+                    add_primitive("POLYLINE", layer, col, {
+                        **base_data(),
+                        "pts": pts,
+                        "closed": bool(getattr(e, "closed", False)),
+                    }, block_name is not None, block_name)
+
+            elif dxftype == "ELLIPSE":
+                raw = _approx_polyline_from_ellipse(e, segments=160)
+                if raw:
+                    pts = []
+                    for x, y in raw:
+                        px, py, _ = apply_point((x, y, 0.0), transform)
+                        pts.append((px, py))
+                    add_primitive("POLYLINE", layer, col, {
+                        **base_data(),
+                        "pts": pts,
+                        "closed": True,
+                    }, block_name is not None, block_name)
+
+            elif dxftype in ("SOLID", "TRACE"):
+                raw = _poly_from_solid_or_trace(e)
+                if raw:
+                    pts = []
+                    for x, y in raw:
+                        px, py, _ = apply_point((x, y, 0.0), transform)
+                        pts.append((px, py))
+                    add_primitive("POLYLINE", layer, col, {
+                        **base_data(),
+                        "pts": pts,
+                        "closed": True,
+                    }, block_name is not None, block_name)
+
+            elif dxftype in ("3DFACE", "3Dface", "FACE3D"):
+                raw = _poly_from_3dface(e)
+                if raw:
+                    pts = []
+                    for x, y in raw:
+                        px, py, _ = apply_point((x, y, 0.0), transform)
+                        pts.append((px, py))
+                    add_primitive("POLYLINE", layer, col, {
+                        **base_data(),
+                        "pts": pts,
+                        "closed": True,
                     }, block_name is not None, block_name)
 
             elif expand_blocks and dxftype == "INSERT":
@@ -733,11 +887,33 @@ def extraer_primitivas_basicas(path: str,
                     for be in blk:
                         entity_to_prims(be, next_transform, depth + 1, block_name=name, byblock_color=col_byblock)
 
+            else:
+                # FALLBACK: intentar convertir la entidad a Path(s) y a polilínea
+                if ezdxf_path is not None:
+                    try:
+                        paths = ezdxf_path.from_entities([e])
+                        for pth in paths:
+                            # flattening(distance) devuelve puntos suficientemente densos
+                            pts_flat = [(float(v.x), float(v.y)) for v in pth.flattening(0.75)]
+                            if len(pts_flat) >= 2:
+                                out = []
+                                for x, y in pts_flat:
+                                    px, py, _ = apply_point((x, y, 0.0), transform)
+                                    out.append((px, py))
+                                add_primitive("POLYLINE", layer, col, {
+                                    **base_data(),
+                                    "pts": out,
+                                    "closed": (len(out) > 2 and out[0] == out[-1]),
+                                }, block_name is not None, block_name)
+                    except Exception:
+                        # No se pudo convertir: ignorar
+                        pass
+
         except Exception:
             # Ignorar entidad problemática
             return
 
-    # Recorrido
+    # Recorrido principal
     for ent in msp:
         entity_to_prims(ent, None, 0, None, None)
         if limitar and cuenta >= limitar:
@@ -756,25 +932,30 @@ def calcular_extents_primitivas(prims: List[Primitive]) -> Optional[Tuple[float,
 
     def upd(x, y):
         nonlocal xmin, ymin, xmax, ymax
-        xmin = min(xmin, x); ymin = min(ymin, y)
-        xmax = max(xmax, x); ymax = max(ymax, y)
+        xmin = min(xmin, x)
+        ymin = min(ymin, y)
+        xmax = max(xmax, x)
+        ymax = max(ymax, y)
 
     for p in prims:
         d = p.data
         t = p.tipo
         try:
             if t == "LINE":
-                upd(d["x1"], d["y1"]); upd(d["x2"], d["y2"])
+                upd(d["x1"], d["y1"])
+                upd(d["x2"], d["y2"])
             elif t == "POLYLINE":
                 for x, y in d.get("pts", []):
                     upd(x, y)
             elif t == "CIRCLE":
                 cx, cy, r = d["cx"], d["cy"], d["r"]
-                upd(cx - r, cy - r); upd(cx + r, cy + r)
+                upd(cx - r, cy - r)
+                upd(cx + r, cy + r)
             elif t == "ARC":
                 cx, cy, r = d["cx"], d["cy"], d["r"]
                 # Caja del círculo como sobreaproximación
-                upd(cx - r, cy - r); upd(cx + r, cy + r)
+                upd(cx - r, cy - r)
+                upd(cx + r, cy + r)
             elif t in ("TEXT", "MTEXT"):
                 upd(d["x"], d["y"])
             elif t == "HATCH":

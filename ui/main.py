@@ -44,7 +44,8 @@ from PyQt5.QtGui import (
     QIcon,
     QPainterPath,
     QTransform,
-    QBrush,              # <-- IMPORT QBrush
+    QBrush,
+    QPolygonF,
 )
 from PyQt5.QtCore import (
     Qt,
@@ -56,13 +57,19 @@ from PyQt5.QtCore import (
     QSize,
 )
 
-# Integración con el módulo de carga
+# Integración con el módulo de carga (ajustado a CORE en mayúsculas)
 from core import cat_loader
 from core.cat_loader import extraer_primitivas_basicas, Primitive
 
 # ================== Configuración Colores / Recursos ================== #
-RESOURCE_LOGO = "assets/logov1.png"
-ASSETS_ICONS_DIR = "assets/icons"
+
+# Raíz del proyecto (carpeta padre de ui)
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+RESOURCE_LOGO = os.path.join(ROOT_DIR, "assets", "logov1.png")
+ASSETS_ICONS_DIR = os.path.join(ROOT_DIR, "assets", "icons")
+STYLES_PATH = os.path.join(ROOT_DIR, "styles", "styles.css")
+
 COLOR_BG_WORKAREA = QColor("#161b1f")
 COLOR_GRID_MINOR = QColor(55, 70, 78)
 COLOR_GRID_MAJOR = QColor(74, 105, 116)
@@ -82,12 +89,13 @@ class SnapMode(Enum):
 
 
 def _resolve_path(*parts):
-    base = os.path.dirname(os.path.abspath(__file__))
-    return os.path.join(base, *parts)
+    # Mantener utilitario general si se requiere, resolviendo desde raíz del proyecto
+    p = os.path.join(*parts)
+    return p if os.path.isabs(p) else os.path.join(ROOT_DIR, p)
 
 
 def _icon(name: str, fallback_standard_icon: QStyle.StandardPixmap = None) -> QIcon:
-    p = _resolve_path(ASSETS_ICONS_DIR, f"{name}.png")
+    p = os.path.join(ASSETS_ICONS_DIR, f"{name}.png")
     if os.path.isfile(p):
         return QIcon(p)
     if fallback_standard_icon is not None:
@@ -177,8 +185,8 @@ class DrawingView(QGraphicsView):
         self._reposition_logo()
 
     def _resolve_logo_path(self):
-        base = os.path.dirname(os.path.abspath(__file__))
-        return os.path.join(base, RESOURCE_LOGO)
+        # Usar recurso absoluto desde la raíz del proyecto
+        return RESOURCE_LOGO
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -307,7 +315,7 @@ class WelcomeCard(QWidget):
 
         logo = QLabel(self)
         logo.setAlignment(Qt.AlignCenter)
-        logo_path = _resolve_path(RESOURCE_LOGO)
+        logo_path = RESOURCE_LOGO
         if os.path.isfile(logo_path):
             pm = QPixmap(logo_path)
             if not pm.isNull():
@@ -381,7 +389,7 @@ class AboutDialog(QDialog):
         lay.setSpacing(10)
         logo = QLabel(self)
         logo.setAlignment(Qt.AlignCenter)
-        logo_path = _resolve_path(RESOURCE_LOGO)
+        logo_path = RESOURCE_LOGO
         if os.path.isfile(logo_path):
             pm = QPixmap(logo_path)
             if not pm.isNull():
@@ -403,7 +411,7 @@ class AboutDialog(QDialog):
         lay.addWidget(btns)
 
 
-# ================== LayerItem (LOD + lineweights + linetypes + texto) ================== #
+# ================== LayerItem (LOD + lineweights + linetypes + texto/HATCH) ================== #
 from PyQt5.QtWidgets import QGraphicsRectItem
 
 class LayerItemBase(QGraphicsRectItem):
@@ -418,8 +426,8 @@ class LayerItem(LayerItemBase):
         self.layer_name = layer_name
         self.primitives = primitives
         self._simplify_fn = simplify_fn
-        self.setPen(QPen(Qt.NoPen))        # <-- CORREGIDO
-        self.setBrush(QBrush(Qt.NoBrush))  # <-- CORREGIDO
+        self.setPen(QPen(Qt.NoPen))        # Sin borde del rectángulo contenedor
+        self.setBrush(QBrush(Qt.NoBrush))  # Sin relleno del rectángulo contenedor
         self._pattern_cache = {}
         self._font_cache = {}
 
@@ -451,6 +459,11 @@ class LayerItem(LayerItemBase):
                     x, y = d["x"], d["y"]
                     xmin = min(xmin, x); xmax = max(xmax, x)
                     ymin = min(ymin,y); ymax = max(ymax, y)
+                elif t == "HATCH":
+                    for loop in d.get("loops", []):
+                        for x, y in loop:
+                            xmin = min(xmin, x); xmax = max(xmax, x)
+                            ymin = min(ymin, y); ymax = max(ymax, y)
             except Exception:
                 continue
         if xmin == float('inf'):
@@ -563,11 +576,27 @@ class LayerItem(LayerItemBase):
                     painter.drawText(0, 0, txt)
                     painter.restore()
 
-                elif t== "POINT":
+                elif t == "POINT":
                     x, y = d["x"], d["y"]
                     size = 3 + (pen_w if pen_w > 0 else 1)
                     painter.drawEllipse(QPointF(x, y), size, size)
-                    
+
+                elif t == "HATCH":
+                    loops = d.get("loops", [])
+                    solid = bool(d.get("solid", False))
+                    painter.save()
+                    if solid:
+                        painter.setBrush(QBrush(QColor(r, g, b, 140)))
+                    else:
+                        painter.setBrush(Qt.NoBrush)
+                    for loop in loops:
+                        if len(loop) >= 2:
+                            poly = QPolygonF([QPointF(x, y) for (x, y) in loop])
+                            if solid:
+                                painter.drawPolygon(poly)
+                            else:
+                                painter.drawPolyline(poly)
+                    painter.restore()
 
             except Exception:
                 continue
@@ -609,11 +638,9 @@ class VentanaPrincipal(QMainWindow):
 
     # ----- Estilos -----
     def _cargar_stylesheet(self):
-        base = os.path.dirname(os.path.abspath(__file__))
-        css_path = os.path.join(base, "styles.css")
-        if os.path.isfile(css_path):
+        if os.path.isfile(STYLES_PATH):
             try:
-                with open(css_path, "r", encoding="utf-8") as f:
+                with open(STYLES_PATH, "r", encoding="utf-8") as f:
                     self.setStyleSheet(f.read())
             except Exception:
                 self.setStyleSheet("QMainWindow { background:#0d4d63; }")
@@ -999,12 +1026,22 @@ class VentanaPrincipal(QMainWindow):
         if not path:
             return
         result = cat_loader.cargar_archivo(path)
+
+        # Diagnóstico: mostrar top de tipos de entidad detectados
+        if cat_loader.es_dwg(result) and result.dwg:
+            types = result.dwg.model_space_entity_types
+            top5 = sorted(types.items(), key=lambda kv: kv[1], reverse=True)[:5]
+            self.statusBar().showMessage(
+                "Top entidades: " + ", ".join(f"{k}:{v}" for k, v in top5), 7000
+            )
+
         if not result.ok:
             msg = f"Error cargando: {result.error.message}"
             if result.error.detail:
                 msg += f" ({result.error.detail})"
             self.statusBar().showMessage(msg, 7000)
             return
+
         self._clear_loaded_items()
         self._has_document = True
         self._set_current_file(path)
@@ -1022,7 +1059,8 @@ class VentanaPrincipal(QMainWindow):
             try:
                 prims = extraer_primitivas_basicas(result.dwg.path,
                                                    expand_blocks=True,
-                                                   incluir_texto=True)
+                                                   incluir_texto=True,
+                                                   incluir_hatch=True)
             except Exception as e:
                 prims = []
                 self.statusBar().showMessage(f"Error extrayendo primitivas: {e}", 6000)
